@@ -1,3 +1,6 @@
+console.log("--- KEY CHECK ---");
+console.log("Razorpay ID:", process.env.RAZORPAY_KEY_ID ? "Found" : "MISSING");
+console.log("Supabase URL:", process.env.SUPABASE_URL ? "Found" : "MISSING");
 require("dotenv").config();
 
 const express = require("express");

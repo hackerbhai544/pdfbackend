@@ -3,7 +3,7 @@ const crypto = require("crypto");
 const supabase = require("../config/supabase");
 
 // ============================
-// CHECK PREVIOUS PURCHASE (Naya Function)
+// CHECK PREVIOUS PURCHASE
 // ============================
 exports.checkPurchase = async (req, res) => {
     try {
@@ -13,45 +13,51 @@ exports.checkPurchase = async (req, res) => {
             return res.status(400).json({ message: "Product ID and Email are required" });
         }
 
-        // Check if purchase exists in Supabase
-        const { data: purchase, error } = await supabase
+        // Fetch purchases for this email and product_id
+        const { data: purchases, error: purchaseError } = await supabase
             .from("purchases")
             .select("*")
-            .eq("email", email)
-            .eq("product_id", product_id)
-            .maybeSingle();
+            .eq("email", email.trim().toLowerCase())
+            .eq("product_id", product_id);
 
-        if (error) {
-            return res.status(500).json({ message: error.message });
+        if (purchaseError) {
+            console.log("Purchase Error:", purchaseError);
+            return res.status(500).json({ message: purchaseError.message });
         }
 
         // Agar user ne pehle se khareeda hua hai
-        if (purchase) {
+        if (purchases && purchases.length > 0) {
             // Product ka pdf_name fetch karo
-            const { data: product } = await supabase
+            const { data: product, error: productError } = await supabase
                 .from("products")
                 .select("pdf_name")
                 .eq("id", product_id)
                 .single();
 
-            if (product) {
-                // Direct download link generate karo
-                const { data: storageData } = await supabase.storage
-                    .from("pdfs")
-                    .createSignedUrl(product.pdf_name, 120, { download: true });
-
-                return res.json({
-                    alreadyPurchased: true,
-                    download_url: storageData.signedUrl
-                });
+            if (productError || !product) {
+                return res.status(404).json({ message: "Product not found" });
             }
+
+            // Direct download link generate karo
+            const { data: storageData, error: storageError } = await supabase.storage
+                .from("pdfs")
+                .createSignedUrl(product.pdf_name, 120, { download: true });
+
+            if (storageError) {
+                return res.status(500).json({ message: storageError.message });
+            }
+
+            return res.json({
+                alreadyPurchased: true,
+                download_url: storageData.signedUrl
+            });
         }
 
         // Agar nahi khareeda hai
         res.json({ alreadyPurchased: false });
 
     } catch (err) {
-        console.log(err);
+        console.log("Catch block error:", err);
         res.status(500).json({ message: err.message });
     }
 };
@@ -156,12 +162,12 @@ exports.verifyPayment = async (req, res) => {
 
         }
 
-        // Save Purchase
+        // Save Purchase (Saved email in lowercase for exact match)
         await supabase
             .from("purchases")
             .insert([
                 {
-                    email,
+                    email: email.trim().toLowerCase(),
                     product_id,
                     payment_id: razorpay_payment_id,
                     order_id: razorpay_order_id,

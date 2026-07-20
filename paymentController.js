@@ -3,6 +3,60 @@ const crypto = require("crypto");
 const supabase = require("../config/supabase");
 
 // ============================
+// CHECK PREVIOUS PURCHASE (Naya Function)
+// ============================
+exports.checkPurchase = async (req, res) => {
+    try {
+        const { product_id, email } = req.body;
+
+        if (!product_id || !email) {
+            return res.status(400).json({ message: "Product ID and Email are required" });
+        }
+
+        // Check if purchase exists in Supabase
+        const { data: purchase, error } = await supabase
+            .from("purchases")
+            .select("*")
+            .eq("email", email)
+            .eq("product_id", product_id)
+            .maybeSingle();
+
+        if (error) {
+            return res.status(500).json({ message: error.message });
+        }
+
+        // Agar user ne pehle se khareeda hua hai
+        if (purchase) {
+            // Product ka pdf_name fetch karo
+            const { data: product } = await supabase
+                .from("products")
+                .select("pdf_name")
+                .eq("id", product_id)
+                .single();
+
+            if (product) {
+                // Direct download link generate karo
+                const { data: storageData } = await supabase.storage
+                    .from("pdfs")
+                    .createSignedUrl(product.pdf_name, 120, { download: true });
+
+                return res.json({
+                    alreadyPurchased: true,
+                    download_url: storageData.signedUrl
+                });
+            }
+        }
+
+        // Agar nahi khareeda hai
+        res.json({ alreadyPurchased: false });
+
+    } catch (err) {
+        console.log(err);
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// ============================
 // CREATE ORDER
 // ============================
 exports.createOrder = async (req, res) => {
@@ -118,7 +172,9 @@ exports.verifyPayment = async (req, res) => {
         // Signed URL
         const { data, error: storageError } = await supabase.storage
             .from("pdfs")
-            .createSignedUrl(product.pdf_name, 120);
+            .createSignedUrl(product.pdf_name, 120, {
+                download: true
+            });
 
         if (storageError) {
 

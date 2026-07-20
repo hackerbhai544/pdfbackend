@@ -13,12 +13,23 @@ exports.checkPurchase = async (req, res) => {
             return res.status(400).json({ message: "Product ID and Email are required" });
         }
 
-        // Fetch purchases for this email and product_id
+        // First fetch product to get its pdf_name
+        const { data: product, error: productError } = await supabase
+            .from("products")
+            .select("pdf_name")
+            .eq("id", product_id)
+            .single();
+
+        if (productError || !product) {
+            return res.status(404).json({ message: "Product not found" });
+        }
+
+        // Fetch purchase using email and pdf_name
         const { data: purchases, error: purchaseError } = await supabase
             .from("purchases")
             .select("*")
             .eq("email", email.trim().toLowerCase())
-            .eq("product_id", product_id);
+            .eq("pdf_name", product.pdf_name);
 
         if (purchaseError) {
             console.log("Purchase Error:", purchaseError);
@@ -27,17 +38,6 @@ exports.checkPurchase = async (req, res) => {
 
         // Agar user ne pehle se khareeda hua hai
         if (purchases && purchases.length > 0) {
-            // Product ka pdf_name fetch karo
-            const { data: product, error: productError } = await supabase
-                .from("products")
-                .select("pdf_name")
-                .eq("id", product_id)
-                .single();
-
-            if (productError || !product) {
-                return res.status(404).json({ message: "Product not found" });
-            }
-
             // Direct download link generate karo
             const { data: storageData, error: storageError } = await supabase.storage
                 .from("pdfs")
@@ -162,18 +162,22 @@ exports.verifyPayment = async (req, res) => {
 
         }
 
-        // Save Purchase (Saved email in lowercase for exact match)
-        await supabase
+        // Save Purchase (UPDATED MATCHING YOUR TABLE COLUMNS)
+        const { error: insertError } = await supabase
             .from("purchases")
             .insert([
                 {
                     email: email.trim().toLowerCase(),
-                    product_id,
                     payment_id: razorpay_payment_id,
                     order_id: razorpay_order_id,
+                    pdf_name: product.pdf_name,
                     amount: product.price
                 }
             ]);
+
+        if (insertError) {
+            console.log("Supabase Insert Error:", insertError);
+        }
 
         // Signed URL
         const { data, error: storageError } = await supabase.storage

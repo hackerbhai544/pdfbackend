@@ -3,6 +3,146 @@ const crypto = require("crypto");
 const supabase = require("../config/supabase");
 
 // ============================
+// AUTHENTICATION (SIGNUP / LOGIN / RESET PASSWORD)
+// ============================
+exports.signup = async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ message: "Email and password are required" });
+        }
+
+        const cleanEmail = email.trim().toLowerCase();
+
+        // Check if user already exists
+        const { data: existingUser } = await supabase
+            .from("users")
+            .select("*")
+            .eq("email", cleanEmail)
+            .maybeSingle();
+
+        if (existingUser) {
+            return res.status(400).json({ message: "Account already exists! Please Login." });
+        }
+
+        // Insert new user
+        const { data: newUser, error } = await supabase
+            .from("users")
+            .insert([{ email: cleanEmail, password: password }])
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({ success: true, user: { email: newUser.email } });
+    } catch (err) {
+        console.log(err);
+        res.status(500).json({ message: err.message });
+    }
+};
+
+exports.login = async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ message: "Email and password are required" });
+        }
+
+        const cleanEmail = email.trim().toLowerCase();
+
+        const { data: user, error } = await supabase
+            .from("users")
+            .select("*")
+            .eq("email", cleanEmail)
+            .eq("password", password)
+            .maybeSingle();
+
+        if (error || !user) {
+            return res.status(401).json({ message: "Invalid email or password" });
+        }
+
+        res.json({ success: true, user: { email: user.email } });
+    } catch (err) {
+        console.log(err);
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// --- NAYA FORGOT / RESET PASSWORD FUNCTION ---
+exports.resetPassword = async (req, res) => {
+    try {
+        const { email, newPassword } = req.body;
+        if (!email || !newPassword) {
+            return res.status(400).json({ message: "Email and new password are required" });
+        }
+
+        const cleanEmail = email.trim().toLowerCase();
+
+        // Check if user exists
+        const { data: user } = await supabase
+            .from("users")
+            .select("*")
+            .eq("email", cleanEmail)
+            .maybeSingle();
+
+        if (!user) {
+            return res.status(404).json({ message: "No account found with this email!" });
+        }
+
+        // Update password in Supabase
+        const { error } = await supabase
+            .from("users")
+            .update({ password: newPassword })
+            .eq("email", cleanEmail);
+
+        if (error) throw error;
+
+        res.json({ success: true, message: "Password updated successfully!" });
+    } catch (err) {
+        console.log(err);
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// ============================
+// FETCH ALL USER PURCHASES (MY LIBRARY)
+// ============================
+exports.getUserPurchases = async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ message: "Email is required" });
+
+        const cleanEmail = email.trim().toLowerCase();
+
+        const { data: purchases, error } = await supabase
+            .from("purchases")
+            .select("*")
+            .eq("email", cleanEmail);
+
+        if (error) throw error;
+
+        const library = await Promise.all(
+            purchases.map(async (item) => {
+                const { data: storageData } = await supabase.storage
+                    .from("pdfs")
+                    .createSignedUrl(item.pdf_name, 3600, { download: true });
+
+                return {
+                    pdf_name: item.pdf_name,
+                    download_url: storageData ? storageData.signedUrl : null,
+                    purchased_at: item.created_at || new Date()
+                };
+            })
+        );
+
+        res.json({ success: true, library });
+    } catch (err) {
+        console.log(err);
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// ============================
 // CHECK PREVIOUS PURCHASE
 // ============================
 exports.checkPurchase = async (req, res) => {
@@ -13,7 +153,6 @@ exports.checkPurchase = async (req, res) => {
             return res.status(400).json({ message: "Product ID and Email are required" });
         }
 
-        // First fetch product to get its pdf_name
         const { data: product, error: productError } = await supabase
             .from("products")
             .select("pdf_name")
@@ -24,7 +163,6 @@ exports.checkPurchase = async (req, res) => {
             return res.status(404).json({ message: "Product not found" });
         }
 
-        // Fetch purchase using email and pdf_name
         const { data: purchases, error: purchaseError } = await supabase
             .from("purchases")
             .select("*")
@@ -32,13 +170,10 @@ exports.checkPurchase = async (req, res) => {
             .eq("pdf_name", product.pdf_name);
 
         if (purchaseError) {
-            console.log("Purchase Error:", purchaseError);
             return res.status(500).json({ message: purchaseError.message });
         }
 
-        // Agar user ne pehle se khareeda hua hai
         if (purchases && purchases.length > 0) {
-            // Direct download link generate karo
             const { data: storageData, error: storageError } = await supabase.storage
                 .from("pdfs")
                 .createSignedUrl(product.pdf_name, 120, { download: true });
@@ -53,11 +188,10 @@ exports.checkPurchase = async (req, res) => {
             });
         }
 
-        // Agar nahi khareeda hai
         res.json({ alreadyPurchased: false });
 
     } catch (err) {
-        console.log("Catch block error:", err);
+        console.log(err);
         res.status(500).json({ message: err.message });
     }
 };
@@ -67,16 +201,12 @@ exports.checkPurchase = async (req, res) => {
 // ============================
 exports.createOrder = async (req, res) => {
     try {
-
         const { product_id, email } = req.body;
 
         if (!product_id || !email) {
-            return res.status(400).json({
-                message: "Product ID and Email are required"
-            });
+            return res.status(400).json({ message: "Product ID and Email are required" });
         }
 
-        // Product fetch from Supabase
         const { data: product, error } = await supabase
             .from("products")
             .select("*")
@@ -84,12 +214,9 @@ exports.createOrder = async (req, res) => {
             .single();
 
         if (error || !product) {
-            return res.status(404).json({
-                message: "Product not found"
-            });
+            return res.status(404).json({ message: "Product not found" });
         }
 
-        // Razorpay Order
         const order = await razorpay.orders.create({
             amount: product.price * 100,
             currency: "INR",
@@ -105,24 +232,16 @@ exports.createOrder = async (req, res) => {
         });
 
     } catch (err) {
-
         console.log(err);
-
-        res.status(500).json({
-            message: err.message
-        });
-
+        res.status(500).json({ message: err.message });
     }
 };
-
 
 // ============================
 // VERIFY PAYMENT
 // ============================
 exports.verifyPayment = async (req, res) => {
-
     try {
-
         const {
             razorpay_order_id,
             razorpay_payment_id,
@@ -131,7 +250,6 @@ exports.verifyPayment = async (req, res) => {
             email
         } = req.body;
 
-        // Verify Signature
         const body = razorpay_order_id + "|" + razorpay_payment_id;
 
         const expectedSignature = crypto
@@ -140,14 +258,9 @@ exports.verifyPayment = async (req, res) => {
             .digest("hex");
 
         if (expectedSignature !== razorpay_signature) {
-
-            return res.status(400).json({
-                message: "Invalid Signature"
-            });
-
+            return res.status(400).json({ message: "Invalid Signature" });
         }
 
-        // Fetch Product
         const { data: product, error } = await supabase
             .from("products")
             .select("*")
@@ -155,14 +268,9 @@ exports.verifyPayment = async (req, res) => {
             .single();
 
         if (error || !product) {
-
-            return res.status(404).json({
-                message: "Product not found"
-            });
-
+            return res.status(404).json({ message: "Product not found" });
         }
 
-        // Save Purchase (UPDATED MATCHING YOUR TABLE COLUMNS)
         const { error: insertError } = await supabase
             .from("purchases")
             .insert([
@@ -175,23 +283,14 @@ exports.verifyPayment = async (req, res) => {
                 }
             ]);
 
-        if (insertError) {
-            console.log("Supabase Insert Error:", insertError);
-        }
+        if (insertError) console.log("Supabase Insert Error:", insertError);
 
-        // Signed URL
         const { data, error: storageError } = await supabase.storage
             .from("pdfs")
-            .createSignedUrl(product.pdf_name, 120, {
-                download: true
-            });
+            .createSignedUrl(product.pdf_name, 120, { download: true });
 
         if (storageError) {
-
-            return res.status(500).json({
-                message: storageError.message
-            });
-
+            return res.status(500).json({ message: storageError.message });
         }
 
         res.json({
@@ -200,13 +299,7 @@ exports.verifyPayment = async (req, res) => {
         });
 
     } catch (err) {
-
         console.log(err);
-
-        res.status(500).json({
-            message: err.message
-        });
-
+        res.status(500).json({ message: err.message });
     }
-
 };
